@@ -4,13 +4,15 @@ const cors = require("cors")
 const express = require("express");
 const bcrypt = require('bcrypt');
 const User = require('./models/user');
-const Comment = require('./models/comment');
-const Upload = require('./models/upload')
 const app = express();
 const PORT = process.env.PORT || 3500;
+const jwt = require("jsonwebtoken")
+
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 app.use(cors())
+
+let refreshTokens = [];
 
 // database connection
 mongoose
@@ -18,264 +20,155 @@ mongoose
     .then(() => console.log("Successful database connection!"))
     .catch((error) => console.log(error.message));
 
-//COMMENT//
-    app.post("/comment", async (req, res) => {
-        const { username, comment ,imgId} = req.body;
-    try {
-        const newComment = new Comment({
-            username,
-            comment,
-            imgId
+
+// generating tokens
+const generateAccessToken = (user) => {
+    return jwt.sign(
+        {id:user.id, username:user.username, isAdmin:user.isAdmin },
+        process.env.SECRET_KEY,
+        {expiresIn: "5s"})
+}
+
+const generateRefreshToken = (user) => {
+    return jwt.sign(
+        {id:user.id, username:user.username, isAdmin:user.isAdmin },
+        process.env.REFRESH_SECRET_KEY)
+}
+
+// checkin if the user is signed in
+const verify = (req,res,next)=>{
+    const authHeader = req.headers.authorization;
+    if (authHeader){
+        const token = authHeader.split(" ")[1];
+        
+        jwt.verify(token, process.env.SECRET_KEY, (err,user) => {
+            if(err){
+                return res.status(403).json("Token is not valid");
+            }
+            req.user = user;
+            next();
         });
-        
-        await newComment.save();
-        
-        // Respond with a success message or data
-        res.status(200).json({ message: "Comment successful" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Internal Server Error" });
+    }else{
+        res.status(401).json("You are not authenticated")
     }
-});
+}
 
-app.get('/getComments/:imageId', async (req, res) => {
-    const { imageId } = req.params;
-    try {
-        const Comments = await Comment.find({ imgId: imageId });
-        if (!Comments) {
-            return res.status(404).json({ error: 'No comments found' });
-        }
-
-        res.status(200).json(Comments);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Internal Server Error' });
+//refreshing the token when it expires
+app.post("/refresh", (req,res) =>{
+    const userId = req.body.id
+    const refreshToken = req.body.token
+    if(!refreshToken) return res.status(401).json("You are not authenticated")
+    if(!refreshTokens.includes(refreshToken)){
+        return res.status(403).json("Refresh token is not valid");
     }
-});
+    jwt.verify(refreshToken, process.env.REFRESH_SECRET_KEY, (err, user) => {
+        err && console.log(err);
+        refreshTokens = refreshTokens.filter((token) => token !==refreshToken);
+        const newAccessToken = generateAccessToken(user);
+        const newRefreshToken = generateRefreshToken(user);
+        refreshTokens.push(newRefreshToken);
+        res.status(200).json({
+            id: userId,
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken
+        })
 
-app.delete('/deleteComment/:_id', async (req, res) => {
-    const { _id} = req.params;
+    })
+})
 
-    try {
-        const deletedComment = await Comment.findByIdAndDelete({_id})
-        
-        if (!deletedComment) {
-            return res.status(404).json({ error: "Comment not found" });
-        }
-        
-        res.status(200).json({ message: "Comment deleted successfully", deletedComment });
-    } catch (error) {
-        console.error("Error while deleting the comment:", error);
-        res.status(500).json({ error: "Internal Server Error" });
+app.delete("/users/:userId", verify, (req,res) =>{
+    console.log(req.user.id);
+    console.log(req.params.userId);
+    if(req.user.id === req.params.userId || req.user.isAdmin){
+        res.status(200).json("User has been deleted.")
+    } else{
+        res.status(403).json("You are not allowed to delete this user")
     }
 })
-    
-    //FILE UPLOAD//
-app.post("/upload", async (req, res) => {
-        const { username, desc, img, id } = req.body;
-    try {
-        const newUpload = new Upload({
-            username,
-            desc,
-            img,
-            id
-        });
-        
-        // Save the new upload to the database
-        await newUpload.save();
-        
-        // Respond with a success message or data
-        res.status(200).json({ message: "Upload successful" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-});
 
-
-app.get('/getUserData/:username', async (req, res) => {
-    const { username } = req.params;
-  
-    try {
-      const user = await User.findOne({ username });
-  
-      if (!user) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-  
-      res.status(200).json({ user });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Internal Server Error' });
-    }
-  });
-
-app.get('/uploads', async (req, res) => {
-    try {
-        const uploads = await Upload.find();
-        res.status(200).json(uploads);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
-
-app.get('/uploads/:username', async (req, res) => {
-    const { username } = req.params;
-    
-    try {
-        // Lekérdezés a felhasználóhoz tartozó összes feltöltött képről
-        const userUploads = await Upload.find({ username });
-
-        // Válasz küldése a lekért képekkel
-        res.status(200).json(userUploads);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
-
-
-app.get('/getImageData/:imageId', async (req, res) => {
-    const { imageId } = req.params;
-
-    try {
-        // Lekérdezés a képről az imageId alapján
-        const imageDetails = await Upload.findOne({ id: imageId });
-
-        // Ellenőrizzük, hogy van-e találat
-        if (!imageDetails) {
-            return res.status(404).json({ error: 'Image not found' });
-        }
-
-        // Válasz küldése a kép részleteivel
-        res.status(200).json(imageDetails);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
-
-app.delete("/uploads/:uploadId", async (req, res) => {
-    const { uploadId } = req.params;
-    
-    try {
-        // Find the upload by ID and remove it
-        const deletedUpload = await Upload.findOneAndDelete({ id: uploadId });
-        
-        
-        if (!deletedUpload) {
-            return res.status(404).json({ error: "Upload not found" });
-        }
-        
-        res.status(200).json({ message: "Upload deleted successfully", deletedUpload });
-    } catch (error) {
-        console.error("Error while deleting the upload:", error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-});
-
-
-//REGISTRATION//
 app.post("/register", async (req, res) => {
-    const { username, password, email,} = req.body;
-    
+    const { username, firstName, secondName, password, email, mobile, birthDate } = req.body;
     try {
-        const checkUsername = await User.findOne({ username });
-        const checkEmail = await User.findOne({ email });
+        const checkUsername = await User.findOne({ username : username });
+        const checkEmail = await User.findOne({ email: email });
+
+        if (checkEmail) {
+            return res.status(409).json({ error: "Ezzel az emaillel már létezik fiók!" });
+        }
+
         if (checkUsername) {
-            res.json("username exists");
+            return res.status(409).json({ error: "Ez a felhasználónév már foglalt!" });
         }
-        else if(checkEmail) {
-            res.json("email exists")
-        } 
-        else {
 
-            const hashedPassword = await bcrypt.hash(password, 10)
-            
-            const newUser = new User({
-                username,
-                password: hashedPassword,
-                email,
-            });
-            await newUser.save();
-            res.json("notexists");
+        if (!username || !firstName || !secondName || !password || !email || !mobile || !birthDate ){
+            return res.status(400).json({ error: "Minden mező kitöltése kötelező!" });
         }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = new User({
+            username,
+            firstName,
+            secondName,
+            password: hashedPassword,
+            email: email.toLowerCase(),
+            mobile,
+            birthDate,
+            isAdmin: false
+        });
+
+        await user.save();
+
+        const accessToken = generateAccessToken(user);
+        const refreshToken = generateRefreshToken(user);
+        refreshTokens.push(refreshToken);
+
+        res.status(200).json({
+            id: user._id,
+            username: user.username,
+            isAdmin: user.isAdmin,
+            accessToken,
+            refreshToken,
+        });
     } catch (error) {
         console.error(error);
-        res.status(500).json("error"); // Send an error response
+        res.status(500).json({ error: "Szerverhiba történt!" });
     }
 });
 
-//LOGIN//
-
-app.post("/login", async (req, res) => {
-    const { emailOrUsername, password } = req.body;
-    try {
-        let user = await User.findOne({ email : emailOrUsername, });
-        if (!user) {
-            user = await User.findOne({username : emailOrUsername})
-            if (!user) {
-                res.status(404).json("notfound");
-                console.log("Notfound")
-                return;
+app.post("/login", async (req, res)=>{
+    const {username, password} = req.body;
+    try{
+        const user = await User.findOne({username: username})
+        if (user){
+            const validPassword = await bcrypt.compare(password, user.password);
+            if(validPassword){
+                const accessToken = generateAccessToken(user)
+                const refreshToken = generateRefreshToken(user)
+                refreshTokens.push(refreshToken)
+                
+                res.status(200).json({
+                    id: user._id,
+                    accessToken,
+                    refreshToken,
+                })
             }
-            const isPasswordValid = await bcrypt.compare(password, user.password);
-            if (isPasswordValid) {
-                res.status(200).json({ success: true, user });
-                return;
-            } else {
-                res.status(401).json("incorrect");
-                return;
-            }
+            else{
+                res.status(404).json("Wrong password")
+            }   
+        } else{
+            res.status(404).json("notfound")
         }
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-            if (isPasswordValid) {
-                res.status(200).json({ success: true, user });
-            } else {
-                res.status(401).json("incorrect");
-            }
-        
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "An error occured" });
-        console.log("error")
-        
+    } catch{
+        res.json("Something went wrong")
     }
-});
+})
 
-// UPDATING A USER //
-app.put("/updateUser/:username", async (req, res) => {
-    const { username } = req.params;
-    const updatedUser = req.body;
-    
-    try {
-        
-        if (updatedUser.password) {
-        const hashedPassword = await bcrypt.hash(updatedUser.password, 10);
-        updatedUser.password = hashedPassword;
-      }
+app.post("/logout", verify, (req,res)=>{
+    const refreshToken = req.body.token;
+    refreshTokens = refreshTokens.filter((token) => token !== refreshToken)
+    res.status(200).json("You logged out succesfully")
+})
 
-      if (updatedUser.pfp) {
-          updatedUser.pfp = updatedUser.pfp;
-        }
-        
-      const savedUser = await User.findOneAndUpdate(
-          { username },
-          updatedUser,
-          { new: true }
-      );
-      
-      if (!savedUser) {
-          return res.status(404).json({ error: "User does not exist" });
-        }
-  
-        res.status(200).json(savedUser);
-    } catch (error) {
-        console.error("Error while updating the user:", error);
-        res.status(500).json({ error: "An error occured" });
-    }
-});
 
 //SERVER LISTENING//
 app.listen(PORT, () => {

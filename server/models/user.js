@@ -5,6 +5,14 @@ const userSchema = new mongoose.Schema({
         type:String,
         required:true
     },
+    firstName:{
+        type:String,
+        required:true
+    },
+    secondName:{
+        type:String,
+        required:true
+    },
     password:{
         type: String,
         required: true
@@ -13,10 +21,17 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: true
     },
-    pfp: {
+    mobile:{
         type: String,
-        required: false,
-        default:"https://www.nicepng.com/png/detail/933-9332131_profile-picture-default-png.png"
+        required: true
+    },
+    birthDate:{
+        type: String,
+        required: true
+    },
+    isAdmin: {
+        type: Boolean,
+        default: false,
     }
 });
 
